@@ -1,3 +1,11 @@
+## Changes from on this fork
+
+This fork adds first class support for `time.Duration`. TOML doesn't define a
+duration type and so we use the `time.ParseDuration` to parse a string
+to our `time.Duration`. Note that this is also achievable by plainly using
+any type and implementing the `ecoding.TextUnmarshaler` interface (see complete
+docs below from the upstream).
+
 ## TOML parser and encoder for Go with reflection
 
 TOML stands for Tom's Obvious, Minimal Language. This Go package provides a
