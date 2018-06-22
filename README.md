@@ -1,4 +1,4 @@
-## Changes from on this fork
+## Changes on this fork
 
 This fork adds first class support for `time.Duration`. TOML doesn't define a
 duration type and so we use the `time.ParseDuration` to parse a string
