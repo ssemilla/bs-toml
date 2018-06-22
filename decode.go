@@ -178,6 +178,14 @@ func (md *MetaData) unify(data interface{}, rv reflect.Value) error {
 		return md.unifyDatetime(data, rv)
 	}
 
+	// Special case. Handle time.Duration values specifically.
+	// Note that TOML doesn't have duration type. This is only specific
+	// for Go and is only here so we don't have to create another duration
+	// type to satisfy TextUnmarshaler.
+	if rv.Type().AssignableTo(rvalue(time.Duration(0)).Type()) {
+		return md.unifyDuration(data, rv)
+	}
+
 	// Special case. Look for a value satisfying the TextUnmarshaler interface.
 	if v, ok := rv.Interface().(TextUnmarshaler); ok {
 		return md.unifyText(data, v)
@@ -354,6 +362,15 @@ func (md *MetaData) unifyDatetime(data interface{}, rv reflect.Value) error {
 		return nil
 	}
 	return badtype("time.Time", data)
+}
+
+func (md *MetaData) unifyDuration(data interface{}, rv reflect.Value) error {
+	if s, ok := data.(string); ok {
+		duration, err := time.ParseDuration(s)
+		rv.Set(reflect.ValueOf(duration))
+		return err
+	}
+	return badtype("time.Duration", data)
 }
 
 func (md *MetaData) unifyString(data interface{}, rv reflect.Value) error {

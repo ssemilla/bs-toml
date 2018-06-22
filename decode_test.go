@@ -420,6 +420,38 @@ func TestDecodeBadDatetime(t *testing.T) {
 	}
 }
 
+func TestDecodeDuration(t *testing.T) {
+	var x struct{ D time.Duration }
+	for _, tt := range []struct {
+		s    string
+		want time.Duration
+	}{
+		{"1s", time.Second},
+		{"2h3m4s", 2*time.Hour + 3*time.Minute + 4*time.Second},
+		{"0h3m5ms6ns", 3*time.Minute + 5*time.Millisecond + 6*time.Nanosecond},
+	} {
+		input := fmt.Sprintf(`D = "%s"`, tt.s)
+		if _, err := Decode(input, &x); err != nil {
+			t.Errorf("Decode(%q): got error: %s", input, err)
+		} else if x.D != tt.want {
+			t.Errorf("got: %q; want: %q", x.D, tt.want)
+		}
+	}
+}
+
+func TestDecodeBadDuration(t *testing.T) {
+	var x struct{ D time.Duration }
+	for _, s := range []string{
+		"1",
+		"1mx",
+	} {
+		input := fmt.Sprintf(`D = "%s"`, s)
+		if _, err := Decode(input, &x); err == nil {
+			t.Errorf("Expected invalid Duration for %q", s)
+		}
+	}
+}
+
 func TestDecodeMultilineStrings(t *testing.T) {
 	var x struct {
 		S string
