@@ -107,11 +107,12 @@ func (enc *Encoder) safeEncode(key Key, rv reflect.Value) (err error) {
 
 func (enc *Encoder) encode(key Key, rv reflect.Value) {
 	// Special case. Time needs to be in ISO8601 format.
+	// Special case. time.Duration needs to be parsable by time.ParseDuration
 	// Special case. If we can marshal the type to text, then we used that.
 	// Basically, this prevents the encoder for handling these types as
 	// generic structs (or whatever the underlying type of a TextMarshaler is).
 	switch rv.Interface().(type) {
-	case time.Time, TextMarshaler:
+	case time.Time, time.Duration, TextMarshaler:
 		enc.keyEqElement(key, rv)
 		return
 	}
@@ -161,6 +162,9 @@ func (enc *Encoder) eElement(rv reflect.Value) {
 		// TextMarshaler below because time.Time implements
 		// encoding.TextMarshaler, but we need to always use UTC.
 		enc.wf(v.UTC().Format("2006-01-02T15:04:05Z"))
+		return
+	case time.Duration:
+		enc.writeQuoted(v.String())
 		return
 	case TextMarshaler:
 		// Special case. Use text marshaler if it's available for this value.

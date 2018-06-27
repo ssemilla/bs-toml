@@ -132,6 +132,16 @@ func TestEncode(t *testing.T) {
 			},
 			wantOutput: fmt.Sprintf("Date = %s\nInt = 1\n", dateStr),
 		},
+		"duration field": {
+			input: struct {
+				D1 time.Duration
+			}{
+				D1: time.Hour*2 + time.Minute*3 + time.Millisecond*5,
+			},
+			wantOutput: `D1 = "` +
+				(time.Hour*2 + time.Minute*3 + time.Millisecond*5).String() +
+				"\"\n",
+		},
 		"array fields": {
 			input: struct {
 				IntArray0 [0]int
