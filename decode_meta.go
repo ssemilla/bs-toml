@@ -88,6 +88,7 @@ func (k Key) add(piece ...string) Key {
 	return newKey
 }
 
+// splitTail splits the last key name in a key.
 func (k Key) splitTail() (Key, string) {
 	if len(k) == 0 {
 		return k, ""
