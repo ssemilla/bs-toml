@@ -81,11 +81,19 @@ func (k Key) maybeQuoted(i int) string {
 	return k[i]
 }
 
-func (k Key) add(piece string) Key {
-	newKey := make(Key, len(k)+1)
+func (k Key) add(piece ...string) Key {
+	newKey := make(Key, len(k)+len(piece))
 	copy(newKey, k)
-	newKey[len(k)] = piece
+	copy(newKey[len(k):], piece)
 	return newKey
+}
+
+// splitTail splits the last key name in a key.
+func (k Key) splitTail() (Key, string) {
+	if len(k) == 0 {
+		return k, ""
+	}
+	return k[:len(k)-1], k[len(k)-1]
 }
 
 // Keys returns a slice of every key in the TOML data, including key groups.

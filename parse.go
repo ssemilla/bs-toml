@@ -21,13 +21,10 @@ type parser struct {
 	context Key
 
 	// the base key name for everything except hashes
-	currentKey string
+	currentKey Key
 
 	// rough approximation of line number
 	approxLine int
-
-	// A map of 'key.group.names' to whether they were created implicitly.
-	implicits map[string]bool
 }
 
 type parseError string
@@ -48,11 +45,10 @@ func parse(data string) (p *parser, err error) {
 	}()
 
 	p = &parser{
-		mapping:   make(map[string]interface{}),
-		types:     make(map[string]tomlType),
-		lx:        lex(data),
-		ordered:   make([]Key, 0),
-		implicits: make(map[string]bool),
+		mapping: make(map[string]interface{}),
+		types:   make(map[string]tomlType),
+		lx:      lex(data),
+		ordered: make([]Key, 0),
 	}
 	for {
 		item := p.next()
@@ -100,42 +96,30 @@ func (p *parser) topLevel(item item) {
 	case itemCommentStart:
 		p.approxLine = item.line
 		p.expect(itemText)
+
 	case itemTableStart:
-		kg := p.next()
-		p.approxLine = kg.line
-
-		var key Key
-		for ; kg.typ != itemTableEnd && kg.typ != itemEOF; kg = p.next() {
-			key = append(key, p.keyString(kg))
-		}
-		p.assertEqual(itemTableEnd, kg.typ)
-
+		key := p.getKey(itemTableStart)
+		p.expect(itemTableEnd)
 		p.establishContext(key, false)
-		p.setType("", tomlHash)
+		p.setType(nil, tomlHash)
 		p.ordered = append(p.ordered, key)
+
 	case itemArrayTableStart:
-		kg := p.next()
-		p.approxLine = kg.line
-
-		var key Key
-		for ; kg.typ != itemArrayTableEnd && kg.typ != itemEOF; kg = p.next() {
-			key = append(key, p.keyString(kg))
-		}
-		p.assertEqual(itemArrayTableEnd, kg.typ)
-
+		key := p.getKey(itemArrayTableStart)
+		p.expect(itemArrayTableEnd)
 		p.establishContext(key, true)
-		p.setType("", tomlArrayHash)
+		p.setType(nil, tomlArrayHash)
 		p.ordered = append(p.ordered, key)
-	case itemKeyStart:
-		kname := p.next()
-		p.approxLine = kname.line
-		p.currentKey = p.keyString(kname)
 
+	case itemKeyStart:
+		key := p.getKey(itemKeyStart)
+		p.currentKey = key
 		val, typ := p.value(p.next())
-		p.setValue(p.currentKey, val)
-		p.setType(p.currentKey, typ)
-		p.ordered = append(p.ordered, p.context.add(p.currentKey))
-		p.currentKey = ""
+		p.setValue(key, val)
+		p.setType(key, typ)
+		p.ordered = append(p.ordered, p.context.add(key...))
+		p.currentKey = nil
+
 	default:
 		p.bug("Unexpected type at top level: %s", item.typ)
 	}
@@ -154,6 +138,20 @@ func (p *parser) keyString(it item) string {
 		p.bug("Unexpected key type: %s", it.typ)
 		panic("unreachable")
 	}
+}
+
+func (p *parser) getKey(from itemType) Key {
+	if from != itemKeyStart {
+		p.expect(itemKeyStart)
+	}
+	kg := p.next()
+	p.approxLine = kg.line
+	var key Key
+	for ; kg.typ != itemKeyEnd && kg.typ != itemEOF; kg = p.next() {
+		key = append(key, p.keyString(kg))
+	}
+	p.assertEqual(itemKeyEnd, kg.typ)
+	return key
 }
 
 // value translates an expected value from the lexer into a Go value wrapped
@@ -276,8 +274,7 @@ func (p *parser) value(it item) (interface{}, tomlType) {
 			outerKey     = p.currentKey
 		)
 
-		p.context = append(p.context, p.currentKey)
-		p.currentKey = ""
+		p.currentKey = nil
 		for it := p.next(); it.typ != itemInlineTableEnd; it = p.next() {
 			if it.typ != itemKeyStart {
 				p.bug("Expected key start but instead found %q, around line %d",
@@ -288,21 +285,18 @@ func (p *parser) value(it item) (interface{}, tomlType) {
 				continue
 			}
 
-			// retrieve key
-			k := p.next()
-			p.approxLine = k.line
-			kname := p.keyString(k)
-
-			// retrieve value
-			p.currentKey = kname
+			key := p.getKey(it.typ)
+			p.currentKey = key
+			p.context = outerContext.add(key...)
 			val, typ := p.value(p.next())
+			p.context = outerContext
+			p.setInlineVal(hash, key, val)
 			// make sure we keep metadata up to date
-			p.setType(kname, typ)
-			p.ordered = append(p.ordered, p.context.add(p.currentKey))
-			hash[kname] = val
+			p.setType(key, typ)
+
+			p.ordered = append(p.ordered, p.context.add(key...))
+			p.currentKey = outerKey
 		}
-		p.context = outerContext
-		p.currentKey = outerKey
 		return hash, tomlHash
 	}
 	p.bug("Unexpected value type: %s", it.typ)
@@ -341,25 +335,17 @@ func numPeriodsOK(s string) bool {
 // establishContext sets the current context of the parser,
 // where the context is either a hash or an array of hashes. Which one is
 // set depends on the value of the `array` parameter.
-//
-// Establishing the context also makes sure that the key isn't a duplicate, and
-// will create implicit hashes automatically.
 func (p *parser) establishContext(key Key, array bool) {
-	var ok bool
 
 	// Always start at the top level and drill down for our context.
-	hashContext := p.mapping
-	keyContext := make(Key, 0)
+	context, tail := key.splitTail()
+	hash := p.mapping
 
-	// We only need implicit hashes for key[0:-1]
-	for _, k := range key[0 : len(key)-1] {
-		_, ok = hashContext[k]
-		keyContext = append(keyContext, k)
+	for _, k := range context {
 
 		// No key? Make an implicit hash and move on.
-		if !ok {
-			p.addImplicit(keyContext)
-			hashContext[k] = make(map[string]interface{})
+		if _, ok := hash[k]; !ok {
+			hash[k] = make(map[string]interface{})
 		}
 
 		// If the hash context is actually an array of tables, then set
@@ -367,54 +353,59 @@ func (p *parser) establishContext(key Key, array bool) {
 		//
 		// Otherwise, it better be a table, since this MUST be a key group (by
 		// virtue of it not being the last element in a key).
-		switch t := hashContext[k].(type) {
+		switch t := hash[k].(type) {
 		case []map[string]interface{}:
-			hashContext = t[len(t)-1]
+			hash = t[len(t)-1]
 		case map[string]interface{}:
-			hashContext = t
+			hash = t
 		default:
-			p.panicf("Key '%s' was already created as a hash.", keyContext)
+			p.panicf("Key '%s' was already created as a hash.", key)
 		}
 	}
 
-	p.context = keyContext
 	if array {
 		// If this is the first element for this array, then allocate a new
 		// list of tables for it.
-		k := key[len(key)-1]
-		if _, ok := hashContext[k]; !ok {
-			hashContext[k] = make([]map[string]interface{}, 0, 5)
+		if _, ok := hash[tail]; !ok {
+			hash[tail] = make([]map[string]interface{}, 0, 8)
 		}
 
 		// Add a new table. But make sure the key hasn't already been used
 		// for something else.
-		if hash, ok := hashContext[k].([]map[string]interface{}); ok {
-			hashContext[k] = append(hash, make(map[string]interface{}))
+		if arrayMap, ok := hash[tail].([]map[string]interface{}); ok {
+			hash[tail] = append(arrayMap, make(map[string]interface{}))
 		} else {
 			p.panicf("Key '%s' was already created and cannot be used as "+
-				"an array.", keyContext)
+				"an array.", key)
 		}
 	} else {
-		p.setValue(key[len(key)-1], make(map[string]interface{}))
+
+		if _, ok := hash[tail]; !ok {
+			hash[tail] = make(map[string]interface{})
+		}
+
+		if _, ok := hash[tail].(map[string]interface{}); !ok {
+			p.panicf("Key '%s' was already created and cannot be used as "+
+				"a hash.", key)
+		}
 	}
-	p.context = append(p.context, key[len(key)-1])
+
+	p.context = key
 }
 
 // setValue sets the given key to the given value in the current context.
-// It will make sure that the key hasn't already been defined, account for
-// implicit key groups.
-func (p *parser) setValue(key string, value interface{}) {
-	var tmpHash interface{}
-	var ok bool
+func (p *parser) setValue(key Key, value interface{}) {
 
+	// traverse current context
 	hash := p.mapping
-	keyContext := make(Key, 0)
 	for _, k := range p.context {
-		keyContext = append(keyContext, k)
-		if tmpHash, ok = hash[k]; !ok {
-			p.bug("Context for key '%s' has not been established.", keyContext)
+
+		v, ok := hash[k]
+		if !ok {
+			p.bug("Context for key '%s' has not been established.", p.context)
 		}
-		switch t := tmpHash.(type) {
+
+		switch t := v.(type) {
 		case []map[string]interface{}:
 			// The context is a table of hashes. Pick the most recent table
 			// defined as the current hash.
@@ -423,33 +414,60 @@ func (p *parser) setValue(key string, value interface{}) {
 			hash = t
 		default:
 			p.bug("Expected hash to have type 'map[string]interface{}', but "+
-				"it has '%T' instead.", tmpHash)
+				"it has '%T' instead.", t)
 		}
 	}
-	keyContext = append(keyContext, key)
 
-	if _, ok := hash[key]; ok {
-		// Typically, if the given key has already been set, then we have
-		// to raise an error since duplicate keys are disallowed. However,
-		// it's possible that a key was previously defined implicitly. In this
-		// case, it is allowed to be redefined concretely. (See the
-		// `tests/valid/implicit-and-explicit-after.toml` test in `toml-test`.)
-		//
-		// But we have to make sure to stop marking it as an implicit. (So that
-		// another redefinition provokes an error.)
-		//
-		// Note that since it has already been defined (as a hash), we don't
-		// want to overwrite it. So our business is done.
-		if p.isImplicit(keyContext) {
-			p.removeImplicit(keyContext)
-			return
+	// traverse key
+	keyContext, tail := key.splitTail()
+	for _, k := range keyContext {
+
+		if _, ok := hash[k]; !ok {
+			hash[k] = make(map[string]interface{})
 		}
 
-		// Otherwise, we have a concrete key trying to override a previous
-		// key, which is *always* wrong.
-		p.panicf("Key '%s' has already been defined.", keyContext)
+		switch v := hash[k].(type) {
+		case []map[string]interface{}:
+			hash = v[len(v)-1]
+		case map[string]interface{}:
+			hash = v
+		default:
+			p.bug("Expected hash to have type 'map[string]interface{}, but "+
+				"it has '%T' instead.", v)
+		}
+
 	}
-	hash[key] = value
+
+	if _, ok := hash[tail]; ok {
+		p.panicf("Duplicated key '%s.%s'", p.context, key)
+	} else {
+		hash[tail] = value
+	}
+}
+
+// setInlineVal sets the value in an inline map.
+func (p *parser) setInlineVal(hash map[string]interface{}, key Key, val interface{}) {
+
+	context, tail := key.splitTail()
+
+	for _, k := range context {
+
+		if _, ok := hash[k]; !ok {
+			hash[k] = make(map[string]interface{})
+		}
+
+		if next, ok := hash[k].(map[string]interface{}); ok {
+			hash = next
+		} else {
+			p.bug("Key was already set to %v, around line %d", next, p.approxLine)
+		}
+	}
+
+	if _, ok := hash[tail]; ok {
+		p.bug("Duplicate key, around line %d", p.approxLine)
+	}
+
+	hash[tail] = val
 }
 
 // setType sets the type of a particular value at a given key.
@@ -457,32 +475,8 @@ func (p *parser) setValue(key string, value interface{}) {
 //
 // Note that if `key` is empty, then the type given will be applied to the
 // current context (which is either a table or an array of tables).
-func (p *parser) setType(key string, typ tomlType) {
-	keyContext := make(Key, 0, len(p.context)+1)
-	for _, k := range p.context {
-		keyContext = append(keyContext, k)
-	}
-	if len(key) > 0 { // allow type setting for hashes
-		keyContext = append(keyContext, key)
-	}
-	p.types[keyContext.String()] = typ
-}
-
-// addImplicit sets the given Key as having been created implicitly.
-func (p *parser) addImplicit(key Key) {
-	p.implicits[key.String()] = true
-}
-
-// removeImplicit stops tagging the given key as having been implicitly
-// created.
-func (p *parser) removeImplicit(key Key) {
-	p.implicits[key.String()] = false
-}
-
-// isImplicit returns true if the key group pointed to by the key was created
-// implicitly.
-func (p *parser) isImplicit(key Key) bool {
-	return p.implicits[key.String()]
+func (p *parser) setType(key Key, typ tomlType) {
+	p.types[p.context.add(key...).String()] = typ
 }
 
 // current returns the full key name of the current context.
@@ -491,9 +485,9 @@ func (p *parser) current() string {
 		return p.context.String()
 	}
 	if len(p.context) == 0 {
-		return p.currentKey
+		return p.currentKey.String()
 	}
-	return fmt.Sprintf("%s.%s", p.context, p.currentKey)
+	return p.context.add(p.currentKey...).String()
 }
 
 func stripFirstNewline(s string) string {

@@ -29,6 +29,7 @@ const (
 	itemArrayTableStart
 	itemArrayTableEnd
 	itemKeyStart
+	itemKeyEnd
 	itemCommentStart
 	itemInlineTableStart
 	itemInlineTableEnd
@@ -273,6 +274,62 @@ func lexTopEnd(lx *lexer) stateFn {
 		"comment, or EOF, but got %q instead", r)
 }
 
+// lexKeyStart will emit the key start item and will denote
+// the start of key name parsing. This function was created
+// plainly to mark the beginning of key name lexing.
+func lexKeyStart(lx *lexer) stateFn {
+	lx.emit(itemKeyStart)
+	return lexKeyNameStart
+}
+
+// lexKeyNameStart consumes parts of a dotted keyname.
+func lexKeyNameStart(lx *lexer) stateFn {
+	lx.skip(isWhitespace)
+	switch r := lx.peek(); {
+	case r == stringStart || r == rawStringStart:
+		lx.ignore()
+		lx.push(lexKeyEnd)
+		return lexValue // reuse string lexing
+	case isBareKeyChar(r):
+		lx.ignore()
+		return lexBareKey
+	default:
+		return lx.errorf("unexpected start of key name: %c", r)
+	}
+}
+
+// lexBareKey consumes a bare key. Assumes that the first character
+// (which is not whitespace) has not yet been consumed.
+func lexBareKey(lx *lexer) stateFn {
+	r := lx.next()
+	if isBareKeyChar(r) {
+		return lexBareKey
+	}
+	lx.backup()
+	lx.emit(itemText)
+	return lexKeyEnd
+}
+
+// lexKeyEnd will check the end of key.
+func lexKeyEnd(lx *lexer) stateFn {
+	lx.skip(isWhitespace)
+	switch r := lx.next(); r {
+	case tableSep: // . dot
+		lx.ignore()
+		return lexKeyNameStart
+	case keySep: // = equal sign
+		lx.ignore()
+		lx.emit(itemKeyEnd)
+		return lexValue
+	case tableEnd: // ] table end
+		lx.ignore()
+		lx.emit(itemKeyEnd)
+		return lx.pop()
+	default:
+		return lx.errorf("unexpected end of key token: %c", r)
+	}
+}
+
 // lexTable lexes the beginning of a table. Namely, it makes sure that
 // it starts with a character other than '.' and ']'.
 // It assumes that '[' has already been consumed.
@@ -287,7 +344,7 @@ func lexTableStart(lx *lexer) stateFn {
 		lx.emit(itemTableStart)
 		lx.push(lexTableEnd)
 	}
-	return lexTableNameStart
+	return lexKeyStart
 }
 
 func lexTableEnd(lx *lexer) stateFn {
@@ -302,109 +359,6 @@ func lexArrayTableEnd(lx *lexer) stateFn {
 	}
 	lx.emit(itemArrayTableEnd)
 	return lexTopEnd
-}
-
-func lexTableNameStart(lx *lexer) stateFn {
-	lx.skip(isWhitespace)
-	switch r := lx.peek(); {
-	case r == tableEnd || r == eof:
-		return lx.errorf("unexpected end of table name " +
-			"(table names cannot be empty)")
-	case r == tableSep:
-		return lx.errorf("unexpected table separator " +
-			"(table names cannot be empty)")
-	case r == stringStart || r == rawStringStart:
-		lx.ignore()
-		lx.push(lexTableNameEnd)
-		return lexValue // reuse string lexing
-	default:
-		return lexBareTableName
-	}
-}
-
-// lexBareTableName lexes the name of a table. It assumes that at least one
-// valid character for the table has already been read.
-func lexBareTableName(lx *lexer) stateFn {
-	r := lx.next()
-	if isBareKeyChar(r) {
-		return lexBareTableName
-	}
-	lx.backup()
-	lx.emit(itemText)
-	return lexTableNameEnd
-}
-
-// lexTableNameEnd reads the end of a piece of a table name, optionally
-// consuming whitespace.
-func lexTableNameEnd(lx *lexer) stateFn {
-	lx.skip(isWhitespace)
-	switch r := lx.next(); {
-	case isWhitespace(r):
-		return lexTableNameEnd
-	case r == tableSep:
-		lx.ignore()
-		return lexTableNameStart
-	case r == tableEnd:
-		return lx.pop()
-	default:
-		return lx.errorf("expected '.' or ']' to end table name, "+
-			"but got %q instead", r)
-	}
-}
-
-// lexKeyStart consumes a key name up until the first non-whitespace character.
-// lexKeyStart will ignore whitespace.
-func lexKeyStart(lx *lexer) stateFn {
-	r := lx.peek()
-	switch {
-	case r == keySep:
-		return lx.errorf("unexpected key separator %q", keySep)
-	case isWhitespace(r) || isNL(r):
-		lx.next()
-		return lexSkip(lx, lexKeyStart)
-	case r == stringStart || r == rawStringStart:
-		lx.ignore()
-		lx.emit(itemKeyStart)
-		lx.push(lexKeyEnd)
-		return lexValue // reuse string lexing
-	default:
-		lx.ignore()
-		lx.emit(itemKeyStart)
-		return lexBareKey
-	}
-}
-
-// lexBareKey consumes the text of a bare key. Assumes that the first character
-// (which is not whitespace) has not yet been consumed.
-func lexBareKey(lx *lexer) stateFn {
-	switch r := lx.next(); {
-	case isBareKeyChar(r):
-		return lexBareKey
-	case isWhitespace(r):
-		lx.backup()
-		lx.emit(itemText)
-		return lexKeyEnd
-	case r == keySep:
-		lx.backup()
-		lx.emit(itemText)
-		return lexKeyEnd
-	default:
-		return lx.errorf("bare keys cannot contain %q", r)
-	}
-}
-
-// lexKeyEnd consumes the end of a key and trims whitespace (up to the key
-// separator).
-func lexKeyEnd(lx *lexer) stateFn {
-	switch r := lx.next(); {
-	case r == keySep:
-		return lexSkip(lx, lexValue)
-	case isWhitespace(r):
-		return lexSkip(lx, lexKeyEnd)
-	default:
-		return lx.errorf("expected key separator %q, but got %q instead",
-			keySep, r)
-	}
 }
 
 // lexValue starts the consumption of a value anywhere a value is expected.
@@ -938,6 +892,8 @@ func (itype itemType) String() string {
 		return "TableEnd"
 	case itemKeyStart:
 		return "KeyStart"
+	case itemKeyEnd:
+		return "KeyEnd"
 	case itemArray:
 		return "Array"
 	case itemArrayEnd:

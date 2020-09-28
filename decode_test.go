@@ -645,6 +645,87 @@ func TestDecodeBadValues(t *testing.T) {
 	}
 }
 
+func TestDecodeDottedKeys(t *testing.T) {
+
+	var tomlBlob = `
+dishes.hamboogie.name = "Hamboogie with fries"
+dishes . "hamboogie" . price = 10.99
+
+[my.pets]
+cats.plato = "cat 1"
+cats . "cauchy" = "cat 2"
+dogs = { hounds.red = "duke", hounds.blue = "sappy", cloud = "chutits" }
+
+[[ pets ]]
+plato = "cat 1"
+cauchy = "cat 2"
+
+[[ pets ]]
+plato = "cat 3"
+cauchy = "cat 4"
+`
+	x := struct {
+		Dishes struct {
+			Hamboogie struct {
+				Name  string  `toml:"name"`
+				Price float64 `toml:"price"`
+			} `toml:"hamboogie"`
+		} `toml:"dishes"`
+		My struct {
+			Pets struct {
+				Cats struct {
+					Plato  string `toml:"plato"`
+					Cauchy string `toml:"cauchy"`
+				} `toml:"cats"`
+				Dogs struct {
+					Hounds struct {
+						Red  string `toml:"red"`
+						Blue string `toml:"blue"`
+					} `toml:"hounds"`
+					Cloud string `toml:"cloud"`
+				} `toml:"dogs"`
+			} `toml:"pets"`
+		} `toml:"my"`
+		Pets []struct {
+			Plato  string `toml:"plato"`
+			Cauchy string `toml:"cauchy"`
+		} `toml:"pets"`
+	}{}
+
+	expected := x
+	expected.Dishes.Hamboogie.Name = "Hamboogie with fries"
+	expected.Dishes.Hamboogie.Price = 10.99
+	expected.My.Pets.Cats.Plato = "cat 1"
+	expected.My.Pets.Cats.Cauchy = "cat 2"
+	expected.My.Pets.Dogs.Hounds.Red = "duke"
+	expected.My.Pets.Dogs.Hounds.Blue = "sappy"
+	expected.My.Pets.Dogs.Cloud = "chutits"
+	expected.Pets = []struct {
+		Plato  string `toml:"plato"`
+		Cauchy string `toml:"cauchy"`
+	}{
+		{
+			Plato:  "cat 1",
+			Cauchy: "cat 2",
+		},
+		{
+			Plato:  "cat 3",
+			Cauchy: "cat 4",
+		},
+	}
+
+	_, err := Decode(tomlBlob, &x)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !reflect.DeepEqual(x, expected) {
+		t.Fatalf("Expected\n-----\n%#v\n-----\nbut got\n-----\n%#v\n",
+			expected, x)
+	}
+
+}
+
 func TestUnmarshaler(t *testing.T) {
 
 	var tomlBlob = `
