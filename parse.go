@@ -100,42 +100,41 @@ func (p *parser) topLevel(item item) {
 	case itemCommentStart:
 		p.approxLine = item.line
 		p.expect(itemText)
+
 	case itemTableStart:
-		kg := p.next()
-		p.approxLine = kg.line
-
-		var key Key
-		for ; kg.typ != itemTableEnd && kg.typ != itemEOF; kg = p.next() {
-			key = append(key, p.keyString(kg))
-		}
-		p.assertEqual(itemTableEnd, kg.typ)
-
+		key := p.getKey(itemTableStart)
+		p.expect(itemTableEnd)
 		p.establishContext(key, false)
 		p.setType("", tomlHash)
 		p.ordered = append(p.ordered, key)
+
 	case itemArrayTableStart:
-		kg := p.next()
-		p.approxLine = kg.line
-
-		var key Key
-		for ; kg.typ != itemArrayTableEnd && kg.typ != itemEOF; kg = p.next() {
-			key = append(key, p.keyString(kg))
-		}
-		p.assertEqual(itemArrayTableEnd, kg.typ)
-
+		key := p.getKey(itemArrayTableStart)
+		p.expect(itemArrayTableEnd)
 		p.establishContext(key, true)
-		p.setType("", tomlArrayHash)
+		p.setType("", tomlHash)
 		p.ordered = append(p.ordered, key)
-	case itemKeyStart:
-		kname := p.next()
-		p.approxLine = kname.line
-		p.currentKey = p.keyString(kname)
 
+	case itemKeyStart:
+
+		key := p.getKey(itemKeyStart)
+		context, currentKey := key.splitTail()
+		p.currentKey = currentKey
+
+		// return the context to original
+		defer func(origContext Key) {
+			p.context = origContext
+			p.currentKey = ""
+		}(p.context)
+
+		if len(context) > 0 {
+			p.establishContext(p.context.add(context...), false)
+		}
 		val, typ := p.value(p.next())
 		p.setValue(p.currentKey, val)
 		p.setType(p.currentKey, typ)
 		p.ordered = append(p.ordered, p.context.add(p.currentKey))
-		p.currentKey = ""
+
 	default:
 		p.bug("Unexpected type at top level: %s", item.typ)
 	}
@@ -154,6 +153,20 @@ func (p *parser) keyString(it item) string {
 		p.bug("Unexpected key type: %s", it.typ)
 		panic("unreachable")
 	}
+}
+
+func (p *parser) getKey(from itemType) Key {
+	if from != itemKeyStart {
+		p.expect(itemKeyStart)
+	}
+	kg := p.next()
+	p.approxLine = kg.line
+	var key Key
+	for ; kg.typ != itemKeyEnd && kg.typ != itemEOF; kg = p.next() {
+		key = append(key, p.keyString(kg))
+	}
+	p.assertEqual(itemKeyEnd, kg.typ)
+	return key
 }
 
 // value translates an expected value from the lexer into a Go value wrapped
@@ -288,18 +301,32 @@ func (p *parser) value(it item) (interface{}, tomlType) {
 				continue
 			}
 
-			// retrieve key
-			k := p.next()
-			p.approxLine = k.line
-			kname := p.keyString(k)
+			key := p.getKey(it.typ)
+			dottedKeys, currentKey := key.splitTail()
+			p.currentKey = currentKey
 
-			// retrieve value
-			p.currentKey = kname
-			val, typ := p.value(p.next())
+			// traverse the hash using the dotted keys creating
+			// keys along the way
+			currentHash := hash
+			for _, k := range dottedKeys {
+				if _, ok := currentHash[k]; !ok {
+					currentHash[k] = make(map[string]interface{})
+				}
+				if nextHash, ok := currentHash[k].(map[string]interface{}); !ok {
+					p.bug("Key was expected to be a map around line %d", p.approxLine)
+				} else {
+					currentHash = nextHash
+				}
+			}
+
+			v := p.next()
+			p.approxLine = v.line
+			val, typ := p.value(v)
 			// make sure we keep metadata up to date
-			p.setType(kname, typ)
-			p.ordered = append(p.ordered, p.context.add(p.currentKey))
-			hash[kname] = val
+			p.setType(p.currentKey, typ)
+			p.ordered = append(p.ordered, p.context.add(key...))
+			hash[p.currentKey] = val
+
 		}
 		p.context = outerContext
 		p.currentKey = outerKey
@@ -345,6 +372,11 @@ func numPeriodsOK(s string) bool {
 // Establishing the context also makes sure that the key isn't a duplicate, and
 // will create implicit hashes automatically.
 func (p *parser) establishContext(key Key, array bool) {
+
+	if len(key) == 0 {
+		return
+	}
+
 	var ok bool
 
 	// Always start at the top level and drill down for our context.
