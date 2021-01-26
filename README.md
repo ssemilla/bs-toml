@@ -14,26 +14,27 @@ packages. This package also supports the `encoding.TextUnmarshaler` and
 `encoding.TextMarshaler` interfaces so that you can define custom data
 representations. (There is an example of this below.)
 
-Spec: https://github.com/toml-lang/toml
+Spec: <https://github.com/toml-lang/toml>
 
 Compatible with TOML version
 [v0.4.0](https://github.com/toml-lang/toml/blob/master/versions/en/toml-v0.4.0.md)
 
-Documentation: https://godoc.org/github.com/BurntSushi/toml
+Documentation: <https://pkg.go.dev/github.com/ssemilla/bs-toml>
 
 Installation:
 
 ```bash
-go get github.com/BurntSushi/toml
+go get github.com/ssemilla/bs-toml
 ```
 
 Try the toml validator:
 
 ```bash
-go get github.com/BurntSushi/toml/cmd/tomlv
+go get github.com/ssemilla/bs-toml/cmd/tomlv
 tomlv some-toml-file.toml
 ```
 
+<!--
 [![Build Status](https://travis-ci.org/BurntSushi/toml.svg?branch=master)](https://travis-ci.org/BurntSushi/toml) [![GoDoc](https://godoc.org/github.com/BurntSushi/toml?status.svg)](https://godoc.org/github.com/BurntSushi/toml)
 
 ### Testing
@@ -41,6 +42,7 @@ tomlv some-toml-file.toml
 This package passes all tests in
 [toml-test](https://github.com/BurntSushi/toml-test) for both the decoder
 and the encoder.
+-->
 
 ### Examples
 

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/BurntSushi/toml"
+	toml "github.com/ssemilla/bs-toml"
 )
 
 type tomlConfig struct {
